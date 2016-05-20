@@ -1,64 +1,111 @@
-﻿using CloudFoundry.CloudController.Common.Exceptions;
-using CloudFoundry.CloudController.V2.Client;
-using CloudFoundry.CloudController.V2.Client.Data;
-using Microsoft.Build.Framework;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace CloudFoundry.Build.Tasks
+﻿namespace CloudFoundry.Build.Tasks
 {
+    using System;
+    using System.Collections.Generic;
+    using System.Linq;
+    using System.Text;
+    using System.Threading.Tasks;
+    using CloudFoundry.CloudController.Common.Exceptions;
+    using CloudFoundry.CloudController.V2.Client;
+    using CloudFoundry.CloudController.V2.Client.Data;
+    using Microsoft.Build.Framework;
+
     public class BindServices : BaseTask
     {
         [Required]
-        public string CFAppGuid { get; set; }
+        public string CFOrganization { get; set; }
 
         [Required]
-        public string[] CFServicesGuids { get; set; }
+        public string CFSpace { get; set; }
 
         [Output]
         public string[] CFBindingGuids { get; set; }
 
         public override bool Execute()
         {
-            logger = new Microsoft.Build.Utilities.TaskLoggingHelper(this);
+            this.CFOrganization = this.CFOrganization.Trim();
+            this.CFSpace = this.CFSpace.Trim();
 
-            CloudFoundryClient client = InitClient();
+            this.Logger = new TaskLogger(this);
 
-            logger.LogMessage("Binding services to app {0}", CFAppGuid);
-
-            List<string> bindingGuids = new List<string>();
-
-            foreach (string serviceGuid in CFServicesGuids)
+            try
             {
-                CreateServiceBindingRequest request = new CreateServiceBindingRequest();
-                request.AppGuid = new Guid(CFAppGuid);
-                request.ServiceInstanceGuid = new Guid(serviceGuid);
+                CloudFoundryClient client = InitClient();
 
-                try
+                var app = LoadAppFromManifest();
+
+                 Guid? spaceGuid = null;
+
+                if ((!string.IsNullOrWhiteSpace(this.CFSpace)) && (!string.IsNullOrWhiteSpace(this.CFOrganization)))
                 {
-                    var result = client.ServiceBindings.CreateServiceBinding(request).Result;
-                    bindingGuids.Add(result.EntityMetadata.Guid);
-                }
-                catch (AggregateException ex)
-                {
-                    foreach (Exception e in ex.Flatten().InnerExceptions)
+                    spaceGuid = Utils.GetSpaceGuid(client, this.Logger, this.CFOrganization, this.CFSpace);
+                    if (spaceGuid == null)
                     {
-                        if (e is CloudFoundryException)
+                        return false;
+                    }
+                }
+
+                var appGuid = Utils.GetAppGuid(client, app.Name, spaceGuid.Value);
+                if (appGuid.HasValue == false)
+                {
+                    Logger.LogError("Could not find app {0} in space {1}", app.Name, this.CFSpace);
+                    return false;
+                }
+
+                Logger.LogMessage("Binding services to app {0}", app.Name);
+
+                List<string> bindingGuids = new List<string>();
+                if (app.Services != null)
+                {
+                    foreach (string serviceName in app.Services)
+                    {
+                        var serviceGuid = Utils.GetServiceGuid(client, serviceName, spaceGuid.Value);
+
+                        if (serviceGuid.HasValue)
                         {
-                            logger.LogWarning(e.Message);
+                            CreateServiceBindingRequest request = new CreateServiceBindingRequest();
+                            request.AppGuid = appGuid.Value;
+                            request.ServiceInstanceGuid = serviceGuid.Value;
+
+                            try
+                            {
+                                var result = client.ServiceBindings.CreateServiceBinding(request).Result;
+                                bindingGuids.Add(result.EntityMetadata.Guid);
+                            }
+                            catch (AggregateException ex)
+                            {
+                                foreach (Exception e in ex.Flatten().InnerExceptions)
+                                {
+                                    if (e is CloudFoundryException)
+                                    {
+                                        Logger.LogWarning(e.Message);
+                                    }
+                                    else
+                                    {
+                                        this.Logger.LogError("Bind Services failed", ex);
+                                        return false;
+                                    }
+                                }
+                            }
                         }
                         else
                         {
-                            throw;
+                            Logger.LogError("Could not find service instance {0}", serviceName);
                         }
                     }
+
+                    this.CFBindingGuids = bindingGuids.ToArray();
+                }
+                else
+                {
+                    return true;
                 }
             }
-
-            CFBindingGuids = bindingGuids.ToArray();
+            catch (Exception exception)
+            {
+                this.Logger.LogError("Bind Services failed", exception);
+                return false;
+            }
 
             return true;
         }

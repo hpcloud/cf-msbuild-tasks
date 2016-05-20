@@ -1,110 +1,90 @@
-﻿using CloudFoundry.CloudController.Common.Exceptions;
-using CloudFoundry.CloudController.V2.Client;
-using CloudFoundry.CloudController.V2.Client.Data;
-using CloudFoundry.UAA;
-using Microsoft.Build.Framework;
-using System;
-using System.Collections.Generic;
-using System.Globalization;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace CloudFoundry.Build.Tasks
+﻿namespace CloudFoundry.Build.Tasks
 {
-    public class CreateRoutes : BaseTask
-    {
-        [Required]
-        public String[] CFRoutes { get; set; }
+    using System;
+    using System.Collections.Generic;
+    using System.Globalization;
+    using System.Linq;
+    using System.Text;
+    using System.Threading.Tasks;
+    using CloudFoundry.CloudController.Common.Exceptions;
+    using CloudFoundry.CloudController.V2.Client;
+    using CloudFoundry.CloudController.V2.Client.Data;
+    using CloudFoundry.UAA;
+    using Microsoft.Build.Framework;
 
+    public class CreateRoutes : BaseTask
+    {  
         [Required]
         public string CFOrganization { get; set; }
 
         [Required]
-        public String CFSpace { get; set; }
+        public string CFSpace { get; set; }
 
         [Output]
-        public String[] CFRouteGuids { get; set; }
+        public string[] CFRouteGuids { get; set; }
 
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Maintainability", "CA1506:AvoidExcessiveClassCoupling")]
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Maintainability", "CA1506:AvoidExcessiveClassCoupling", Justification = "Coupling needed")]
         public override bool Execute()
-        { 
-            logger = new Microsoft.Build.Utilities.TaskLoggingHelper(this);
+        {
+            this.CFOrganization = this.CFOrganization.Trim();
+            this.CFSpace = this.CFSpace.Trim();
 
-            CloudFoundryClient client = InitClient();
+            var app = LoadAppFromManifest();
+            this.Logger = new TaskLogger(this);
 
-            Guid? spaceGuid = null;
-
-            if (CFSpace.Length > 0 && CFOrganization.Length > 0)
+            try
             {
+                CloudFoundryClient client = InitClient();
 
-                spaceGuid = Utils.GetSpaceGuid(client, logger, CFOrganization, CFSpace);
+                Guid? spaceGuid = null;
 
-                if (spaceGuid == null)
+                if ((!string.IsNullOrWhiteSpace(this.CFSpace)) && (!string.IsNullOrWhiteSpace(this.CFOrganization)))
                 {
+                    spaceGuid = Utils.GetSpaceGuid(client, this.Logger, this.CFOrganization, this.CFSpace);
+
+                    if (spaceGuid == null)
+                    {
+                        return false;
+                    }
+                }
+
+                List<string> createdGuid = new List<string>();
+                PagedResponseCollection<ListAllDomainsDeprecatedResponse> domainInfoList = client.DomainsDeprecated.ListAllDomainsDeprecated().Result;
+
+                if (spaceGuid.HasValue)
+                {
+                    foreach (string domain in app.Domains)
+                    {
+                            foreach (string host in app.Hosts)
+                            {
+                                if (string.IsNullOrWhiteSpace(host) == false)
+                                {
+                                    Logger.LogMessage("Creating route {0}.{1}", host, domain);
+
+                                    ListAllDomainsDeprecatedResponse domainInfo = domainInfoList.Where(o => o.Name == domain).FirstOrDefault();
+
+                                    if (domainInfo == null)
+                                    {
+                                        Logger.LogError("Domain {0} not found", domain);
+                                        continue;
+                                    }
+
+                                    this.CreateRoute(client, spaceGuid, createdGuid, host, domainInfo);
+                                }
+                            }
+                    }
+
+                    this.CFRouteGuids = createdGuid.ToArray();
+                }
+                else
+                {
+                    Logger.LogError("Space {0} not found", this.CFSpace);
                     return false;
                 }
             }
-
-            List<string> createdGuid = new List<string>();
-            PagedResponseCollection<ListAllDomainsDeprecatedResponse> domainInfoList = client.DomainsDeprecated.ListAllDomainsDeprecated().Result;
-
-            if (spaceGuid.HasValue)
+            catch (Exception exception)
             {
-                foreach (String Route in CFRoutes)
-                {
-                    if (Route.Contains(';'))
-                    {
-                        foreach (var url in Route.Split(';'))
-                        {
-                            logger.LogMessage("Creating route {0}", url);
-                            string domain = string.Empty;
-                            string host = string.Empty;
-                            Utils.ExtractDomainAndHost(url, out domain, out host);
-
-                            if (domain.Length == 0 || host.Length == 0)
-                            {
-                                logger.LogError("Error extracting domain and host information from route {0}", url);
-                                continue;
-                            }
-
-                            ListAllDomainsDeprecatedResponse domainInfo = domainInfoList.Where(o => o.Name == domain).FirstOrDefault();
-
-                            if (domainInfo == null)
-                            {
-                                logger.LogError("Domain {0} not found", domain);
-                                continue;
-                            }
-
-                            CreateRoute(client, spaceGuid, createdGuid, host, domainInfo);
-                        }
-                    }
-                    else
-                    {
-                        string domain = string.Empty;
-                        string host = string.Empty;
-                        Utils.ExtractDomainAndHost(Route, out domain, out host);
-
-                        if (domain.Length == 0 || host.Length == 0)
-                        {
-                            logger.LogError("Error extracting domain and host information from route {0}", Route);
-                            continue;
-                        }
-                        ListAllDomainsDeprecatedResponse domainInfo = domainInfoList.Where(o => o.Name == domain).FirstOrDefault();
-
-                        if (domainInfo == null)
-                        {
-                            logger.LogError("Domain {0} not found", domain);
-                            continue;
-                        }
-                        CreateRoute(client, spaceGuid, createdGuid, host, domainInfo);
-                    }
-                }
-                CFRouteGuids = createdGuid.ToArray();
-            }
-            else
-            {
-                logger.LogError("Space {0} not found", CFSpace);
+                this.Logger.LogError("Create Route failed", exception);
                 return false;
             }
 
@@ -119,13 +99,12 @@ namespace CloudFoundry.Build.Tasks
             req.Host = host;
             try
             {
-
                 var routes = client.Routes.ListAllRoutes(new RequestOptions() { Query = string.Format(CultureInfo.InvariantCulture, "host:{0}&domain_guid:{1}", host, domainInfo.EntityMetadata.Guid) }).Result;
 
                 if (routes.Count() > 0)
                 {
                     ListAllRoutesResponse routeInfo = routes.FirstOrDefault();
-                    logger.LogMessage("Route {0}.{1} already exists", routeInfo.Host, routeInfo.DomainUrl);
+                    Logger.LogMessage("Route {0}.{1} already exists", routeInfo.Host, domainInfo.Name);
                     if (routeInfo != null)
                     {
                         createdGuid.Add(routeInfo.EntityMetadata.Guid);
@@ -143,7 +122,7 @@ namespace CloudFoundry.Build.Tasks
                 {
                     if (e is CloudFoundryException)
                     {
-                        logger.LogWarning(e.Message);
+                        Logger.LogWarning(e.Message);
                     }
                     else
                     {

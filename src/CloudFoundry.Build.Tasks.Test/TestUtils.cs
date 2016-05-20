@@ -203,11 +203,6 @@ namespace CloudFoundry.Build.Tasks.Test
             return Task.Factory.StartNew(() => { });
         }
 
-        internal static Task CustomDeleteServiceInstance(CloudController.V2.Client.Base.AbstractServiceInstancesEndpoint arg1, Guid? arg2)
-        {
-            return Task.Factory.StartNew(() => { });
-        }
-
         internal static Task<PagedResponseCollection<ListAllRoutesResponse>> CustomListAllRoutes(CloudController.V2.Client.Base.AbstractRoutesEndpoint arg1, RequestOptions arg2)
         {
             return Task.Factory.StartNew<PagedResponseCollection<ListAllRoutesResponse>>(() =>
@@ -292,8 +287,7 @@ namespace CloudFoundry.Build.Tasks.Test
 
         internal static List<ListAllOrganizationsResponse> CustomListAllOrganizationsResponse(PagedResponseCollection<ListAllOrganizationsResponse> arg1)
         {
-            return new List<ListAllOrganizationsResponse>() { new ListAllOrganizationsResponse(){ EntityMetadata=new Metadata()}};
-
+            return new List<ListAllOrganizationsResponse>() { new ListAllOrganizationsResponse(){ EntityMetadata=new Metadata() }};
         }
 
         internal static Task<PagedResponseCollection<ListAllSpacesForOrganizationResponse>> CustomListAllSpacesForOrganization(CloudController.V2.Client.Base.AbstractOrganizationsEndpoint arg1, Guid? arg2, RequestOptions arg3)
@@ -304,6 +298,49 @@ namespace CloudFoundry.Build.Tasks.Test
         internal static List<ListAllSpacesForOrganizationResponse> CustomListAllSpacesForOrganizationResponse(PagedResponseCollection<ListAllSpacesForOrganizationResponse> arg1)
         {
             return new List<ListAllSpacesForOrganizationResponse>() {new ListAllSpacesForOrganizationResponse(){ EntityMetadata=new Metadata(), Name="TestSpace"}};
+        }
+
+        internal static EntityGuid CustomMetadataGuidGet(Metadata arg1)
+        {
+            return EntityGuid.FromGuid(Guid.NewGuid());
+        }
+
+        internal static Manifests.Models.Application[] CustomManifestApplications(Manifests.Manifest arg1)
+        {
+            var app = new Manifests.Models.Application() { Name = "testApp", StackName = "testStack", InstanceCount = 1, Memory = 512, Path = "C:\\" };
+
+            app.Domains.Add("domain.com" );
+            app.Hosts.Add("testApp" );
+            app.Services.Add("testservice");
+
+            return new Manifests.Models.Application[1]{
+               app
+            };
+        }
+
+        internal static Task<PagedResponseCollection<ListAllServiceInstancesForSpaceResponse>> CustomListAllServiceInstancesForSpace(CloudController.V2.Client.Base.AbstractSpacesEndpoint arg1, Guid? arg2, RequestOptions arg3)
+        {
+            return Task<PagedResponseCollection<ListAllServiceInstancesForSpaceResponse>>.Factory.StartNew(() => {
+                return new PagedResponseCollection<ListAllServiceInstancesForSpaceResponse>();
+            });
+        }
+
+        internal static List<ListAllServiceInstancesForSpaceResponse> CustomListAllServiceInstancesForSpaceResponse(PagedResponseCollection<ListAllServiceInstancesForSpaceResponse> arg1)
+        {
+            return new List<ListAllServiceInstancesForSpaceResponse>() { new ListAllServiceInstancesForSpaceResponse() { EntityMetadata = new Metadata() } };
+        }
+
+        internal static Manifests.Manifest CustomReadManifest(string arg1)
+        {
+            return new Manifests.Manifest();
+        }
+
+        internal static Task<DeleteServiceInstanceResponse> CustomDeleteServiceInstance(ServiceInstancesEndpoint arg1, Guid? arg2)
+        {
+            return Task<DeleteServiceInstanceResponse>.Factory.StartNew(() =>
+            {
+                return new DeleteServiceInstanceResponse();
+            });
         }
     }
 }

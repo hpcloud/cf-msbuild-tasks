@@ -1,23 +1,17 @@
-using CloudFoundry.CloudController.V2.Client;
-using CloudFoundry.CloudController.V2.Client.Data;
-using Microsoft.Build.Framework;
-using System;
-using System.Collections.Generic;
-using System.Globalization;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
 namespace CloudFoundry.Build.Tasks
 {
-    public class UnbindRoute:BaseTask
-    {
-        [Required]
-        public string CFRoute { get; set; }
+    using System;
+    using System.Collections.Generic;
+    using System.Globalization;
+    using System.Linq;
+    using System.Text;
+    using System.Threading.Tasks;
+    using CloudFoundry.CloudController.V2.Client;
+    using CloudFoundry.CloudController.V2.Client.Data;
+    using Microsoft.Build.Framework;
 
-        [Required]
-        public string CFAppName { get; set; }
-
+    public class UnbindRoute : BaseTask
+    {   
         [Required]
         public string CFOrganization { get; set; }
 
@@ -26,61 +20,61 @@ namespace CloudFoundry.Build.Tasks
 
         public override bool Execute()
         {
+            this.CFOrganization = this.CFOrganization.Trim();
+            this.CFSpace = this.CFSpace.Trim();
 
-            logger = new Microsoft.Build.Utilities.TaskLoggingHelper(this);
+            this.Logger = new TaskLogger(this);
+            var app = LoadAppFromManifest();
 
-            CloudFoundryClient client = InitClient();
-
-            logger.LogMessage("Unbinding route {0} from app {1}", CFRoute, CFAppName);
-
-            string domain=string.Empty;
-            string host = string.Empty;
-            Utils.ExtractDomainAndHost(CFRoute, out domain, out host);
-
-            if (domain.Length == 0 || host.Length == 0)
+            try
             {
-                logger.LogError("Error extracting domain and host information from route {0}", CFRoute);
-                return false;
-            }
+                CloudFoundryClient client = InitClient();
 
-            PagedResponseCollection<ListAllDomainsDeprecatedResponse> domainInfoList = client.DomainsDeprecated.ListAllDomainsDeprecated().Result;
-            ListAllDomainsDeprecatedResponse domainInfo = domainInfoList.Where(o => o.Name == domain).FirstOrDefault();
+                Guid? spaceGuid = null;
 
-            Guid? spaceGuid = null;
-
-            if (CFSpace.Length > 0 && CFOrganization.Length > 0)
-            {
-                spaceGuid = Utils.GetSpaceGuid(client, logger, CFOrganization, CFSpace);
-                if (spaceGuid == null)
+                if ((!string.IsNullOrWhiteSpace(this.CFSpace)) && (!string.IsNullOrWhiteSpace(this.CFOrganization)))
                 {
+                    spaceGuid = Utils.GetSpaceGuid(client, this.Logger, this.CFOrganization, this.CFSpace);
+                    if (spaceGuid == null)
+                    {
+                        return false;
+                    }
+                }
+
+                var appGuid = Utils.GetAppGuid(client, app.Name, spaceGuid.Value);
+
+                if (appGuid.HasValue)
+                {
+                    PagedResponseCollection<ListAllDomainsDeprecatedResponse> domainInfoList = client.DomainsDeprecated.ListAllDomainsDeprecated().Result;
+
+                    foreach (string domain in app.Domains)
+                    {
+                        foreach (string host in app.Hosts)
+                        {
+                            Logger.LogMessage("Unbinding route {0}.{1} from app {2}", host, domain, app.Name);
+
+                            ListAllDomainsDeprecatedResponse domainInfo = domainInfoList.Where(o => o.Name == domain).FirstOrDefault();
+                            var routeGuid = Utils.GetRouteGuid(client, host, domainInfo.EntityMetadata.Guid.ToGuid());
+                            if (routeGuid.HasValue)
+                            {
+                                client.Routes.RemoveAppFromRoute(routeGuid.Value, appGuid.Value);
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    Logger.LogError("App {0} not found in space {1}", app.Name, this.CFSpace);
                     return false;
                 }
             }
-
-            PagedResponseCollection<ListAllAppsForSpaceResponse> appList = client.Spaces.ListAllAppsForSpace(spaceGuid, new RequestOptions() { Query = "name:" + CFAppName }).Result;
-            if (appList.Count() > 1)
+            catch (Exception exception)
             {
-                logger.LogError("There are more applications named {0} in space {1}", CFAppName, CFSpace);
+                this.Logger.LogError("Unbind Route failed", exception);
                 return false;
             }
-
-            Guid appGuid = new Guid(appList.FirstOrDefault().EntityMetadata.Guid);
-
-            PagedResponseCollection<ListAllRoutesForAppResponse> routeList = client.Apps.ListAllRoutesForApp(appGuid).Result;
-
-            ListAllRoutesForAppResponse routeInfo =  routeList.Where(o => o.Host == host && o.DomainGuid == new Guid(domainInfo.EntityMetadata.Guid)).FirstOrDefault();
-
-            if (routeInfo == null)
-            {
-                logger.LogError("Route {0} not found in {1}'s routes", CFRoute, CFAppName);
-                return false;
-            }
-
-            client.Routes.RemoveAppFromRoute(new Guid(routeInfo.EntityMetadata.Guid), appGuid).Wait();
-
+        
             return true;
         }
-
-      
     }
 }

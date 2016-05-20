@@ -2,20 +2,64 @@
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using CloudFoundry.Build.Tasks.IntegrationTests.Properties;
 using System.Net;
+using System.Reflection;
+using System.IO;
+using Microsoft.Build.Utilities;
+using System.Globalization;
 
 namespace CloudFoundry.Build.Tasks.IntegrationTests
 {
     [TestClass]
+    [DeploymentItem(@"Assets")]
     public class TaskFlow_Test
     {
         [TestMethod]
-        public void Flow_IntegrationTest()
+        public void PhpApp_IntegrationTest()
+        {
+            string assemblyDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            string appPath = Path.Combine(assemblyDirectory, "PhpApp");
+            string manifest = Path.Combine(assemblyDirectory, "testmanifest.yml");
+            string phpManifest = Path.Combine(assemblyDirectory, "phpmanifest.yml");
+
+            string guid = Guid.NewGuid().ToString();
+            string host = string.Format(Settings.Default.Host, guid);
+
+            string man = File.ReadAllText(manifest);
+
+            man = string.Format(CultureInfo.InvariantCulture, man, guid, host, Settings.Default.Domain, appPath, Settings.Default.LinuxStack);
+            File.WriteAllText(phpManifest, man);
+
+            Assert.IsTrue(RunTasks(phpManifest, host, appPath));
+        }
+
+        [TestMethod]
+        public void AspApp_IntegrationTest()
+        {
+            string assemblyDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            string appPath = Path.Combine(assemblyDirectory, "TestApp");
+            string manifest = Path.Combine(assemblyDirectory, "testmanifest.yml");
+            string aspManifest = Path.Combine(assemblyDirectory, "aspmanifest.yml"); 
+
+            string guid = Guid.NewGuid().ToString();
+            string host = string.Format(Settings.Default.Host, guid);
+
+            string man = File.ReadAllText(manifest);
+
+            man = string.Format(CultureInfo.InvariantCulture, man, guid, host, Settings.Default.Domain, appPath, Settings.Default.WindowsStack);
+
+            File.WriteAllText(aspManifest, man);
+
+            Assert.IsTrue(RunTasks(aspManifest, host, appPath));
+        }
+
+        private bool RunTasks(string manifest, string host, string appPath)
         {
             LoginTask login = new LoginTask();
             login.BuildEngine = new FakeBuildEngine();
             login.CFUser = Settings.Default.User;
             login.CFPassword = Settings.Default.Password;
             login.CFServerUri = Settings.Default.ServerUri;
+            login.CFManifest = manifest;
             login.CFSkipSslValidation = true;
 
             login.Execute();
@@ -25,14 +69,9 @@ namespace CloudFoundry.Build.Tasks.IntegrationTests
             task.CFRefreshToken = login.CFRefreshToken;
             task.CFServerUri = Settings.Default.ServerUri;
             task.CFSkipSslValidation = true;
-            task.CFAppName = "testIntegration";
-            task.CFAppMemory = 512;
-            task.CFAppInstances = 1;
-            task.CFSpace = "TestSpace";
-            task.CFOrganization = "TestOrg";
-            task.CFStack = "win2012";
-            task.CFEnvironmentJson = "{\"mykey\":\"abcd\",\"secondkey\":\"efgh\"}";
-
+            task.CFSpace = Settings.Default.Space;
+            task.CFOrganization = Settings.Default.Organization;
+            task.CFManifest = manifest;
             task.BuildEngine = new FakeBuildEngine();
             task.Execute();
 
@@ -41,12 +80,13 @@ namespace CloudFoundry.Build.Tasks.IntegrationTests
             pushTask.CFPassword = Settings.Default.Password;
             pushTask.CFServerUri = Settings.Default.ServerUri;
             pushTask.CFSkipSslValidation = true;
-            pushTask.CFAppGuid = task.CFAppGuid;
-            pushTask.CFAppPath = Settings.Default.AppPath;
-            pushTask.CFStart = true;
+            pushTask.CFManifest = manifest;
+            pushTask.CFOrganization = Settings.Default.Organization;
+            pushTask.CFSpace = Settings.Default.Space;
+            pushTask.CFAppPath = appPath;
 
             pushTask.BuildEngine = new FakeBuildEngine();
-            
+
             pushTask.Execute();
 
             CreateRoutes routeTask = new CreateRoutes();
@@ -54,11 +94,11 @@ namespace CloudFoundry.Build.Tasks.IntegrationTests
             routeTask.CFPassword = Settings.Default.Password;
             routeTask.CFServerUri = Settings.Default.ServerUri;
             routeTask.CFSkipSslValidation = true;
-            routeTask.CFRoutes = new string[1] { "testRoute.15.126.213.170.xip.io" };
-            routeTask.CFSpace = "TestSpace";
-            routeTask.CFOrganization = "TestOrg";
+            routeTask.CFManifest = manifest;
+            routeTask.CFSpace = Settings.Default.Space;
+            routeTask.CFOrganization = Settings.Default.Organization;
 
-            routeTask.BuildEngine=new FakeBuildEngine();
+            routeTask.BuildEngine = new FakeBuildEngine();
 
             routeTask.Execute();
 
@@ -68,24 +108,11 @@ namespace CloudFoundry.Build.Tasks.IntegrationTests
             bindTask.CFServerUri = Settings.Default.ServerUri;
             bindTask.BuildEngine = new FakeBuildEngine();
             bindTask.CFSkipSslValidation = true;
-
-            bindTask.CFAppGuid = task.CFAppGuid;
-            bindTask.CFRouteGuids = routeTask.CFRouteGuids;
+            bindTask.CFManifest = manifest;
+            bindTask.CFOrganization = Settings.Default.Organization;
+            bindTask.CFSpace = Settings.Default.Space;
 
             bindTask.Execute();
-           
-            CreateService serviceTask = new CreateService();
-            serviceTask.CFUser = Settings.Default.User;
-            serviceTask.CFPassword = Settings.Default.Password;
-            serviceTask.CFServerUri = Settings.Default.ServerUri;
-            serviceTask.BuildEngine = new FakeBuildEngine();
-            serviceTask.CFSkipSslValidation = true;
-            serviceTask.CFServiceName = "testService";
-            serviceTask.CFServicePlan = "free";
-            serviceTask.CFServiceType = "mysql";
-            serviceTask.CFSpace = "TestSpace";
-            serviceTask.CFOrganization = "TestOrg";
-            serviceTask.Execute();
 
             BindServices bindServiceTask = new BindServices();
             bindServiceTask.CFUser = Settings.Default.User;
@@ -93,54 +120,68 @@ namespace CloudFoundry.Build.Tasks.IntegrationTests
             bindServiceTask.CFServerUri = Settings.Default.ServerUri;
             bindServiceTask.BuildEngine = new FakeBuildEngine();
             bindServiceTask.CFSkipSslValidation = true;
-            bindServiceTask.CFAppGuid = task.CFAppGuid;
-            bindServiceTask.CFServicesGuids = new string[1] { serviceTask.CFServiceGuid };
+            bindServiceTask.CFManifest = manifest;
+            bindServiceTask.CFOrganization = Settings.Default.Organization;
+            bindServiceTask.CFSpace = Settings.Default.Space;
             bindServiceTask.Execute();
 
-            if (CheckIfAppIsWorking(routeTask.CFRoutes[0], 3) == true)
-            {
+            RestartApp restartTask = new RestartApp();
+            restartTask.BuildEngine = new FakeBuildEngine();
+            restartTask.CFUser = Settings.Default.User;
+            restartTask.CFPassword = Settings.Default.Password;
+            restartTask.CFServerUri = Settings.Default.ServerUri;
+            restartTask.CFManifest = manifest;
+            restartTask.CFSkipSslValidation = true;
+            restartTask.CFOrganization = Settings.Default.Organization;
+            restartTask.CFSpace = Settings.Default.Space;
+            restartTask.Execute();
 
+            if (CheckIfAppIsWorking(string.Format(CultureInfo.InvariantCulture, "{0}.{1}", host, Settings.Default.Domain), 60) == true)
+            {
                 DeleteApp delTask = new DeleteApp();
                 delTask.CFUser = Settings.Default.User;
                 delTask.CFPassword = Settings.Default.Password;
                 delTask.CFServerUri = Settings.Default.ServerUri;
                 delTask.CFSkipSslValidation = true;
-                delTask.CFOrganization = "TestOrg";
-                delTask.CFSpace = "TestSpace";
-                delTask.CFAppName = "testIntegration";
+                delTask.CFSpace = Settings.Default.Space;
+                delTask.CFOrganization = Settings.Default.Organization;
+                delTask.CFManifest = manifest;
                 delTask.CFDeleteServices = true;
                 delTask.CFDeleteRoutes = true;
                 delTask.BuildEngine = new FakeBuildEngine();
 
-                Assert.IsTrue(delTask.Execute());
+                return delTask.Execute();
             }
             else
             {
-                Assert.Fail("Application is not working");
+                return false;
             }
         }
 
         private bool CheckIfAppIsWorking(string route, int retryCount)
         {
-            IPHostEntry info = null;
             for (int i = 0; i < retryCount; i++)
             {
                 try
                 {
-                    info = System.Net.Dns.GetHostEntry(route);
-                    break;
+                    WebRequest request = WebRequest.Create(string.Format("http://{0}", route));
+                    HttpWebResponse response = (HttpWebResponse)request.GetResponse();
+
+                    if (response.StatusCode == HttpStatusCode.OK)
+                    {
+                        return true;
+                    }
+                    else
+                    {
+                        System.Threading.Thread.Sleep(5000);
+                    }
                 }
                 catch //If exception thrown then couldn't get response from address
                 {
-                    System.Threading.Thread.Sleep(7000);
+                    System.Threading.Thread.Sleep(5000);
                 }
             }
-            if (info == null)
-            {
-                return false;
-            }
-            return true;
+            return false;
         }
-
     }
 }
